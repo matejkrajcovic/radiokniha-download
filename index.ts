@@ -1,30 +1,12 @@
-// Import mp3tag.js with CJS/ESM interoperability safety: Deno's npm loader can
-// sometimes surface the CommonJS export object instead of the class itself,
-// triggering "This expression is not constructable". We normalize here.
-import MP3TagModule from "npm:mp3tag.js";
+import MP3Tag from "mp3tag.js";
 
-// Narrow unknown values to a constructable class.
-type MP3TagCtor = new (
-    buffer: ArrayBuffer | Uint8Array | Buffer,
-    verbose?: boolean,
-) => {
-    read: (...args: unknown[]) => unknown;
-    save: (...args: unknown[]) => unknown;
-    error: string;
-    tags: Record<string, unknown>;
-};
-
-function pickMP3Tag(mod: unknown): MP3TagCtor {
-    if (typeof mod === "function") return mod as MP3TagCtor; // UMD default export is the class itself
-    if (mod && typeof mod === "object") {
-        const m = mod as { default?: unknown; MP3Tag?: unknown };
-        if (typeof m.default === "function") return m.default as MP3TagCtor;
-        if (typeof m.MP3Tag === "function") return m.MP3Tag as MP3TagCtor;
-    }
-    throw new Error("Unable to resolve MP3Tag constructor export");
-}
-const MP3Tag = pickMP3Tag(MP3TagModule);
 import { Buffer } from "node:buffer";
+import fs from 'node:fs';
+import fsPromises from 'fs/promises'
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+const run = promisify(execFile);
 
 interface EpisodeAudioLink {
     url: string;
@@ -56,7 +38,7 @@ function writeId3Tags(
     episodeTitle: string,
     track: string,
 ): void {
-    const fileBytes = Deno.readFileSync(filename);
+    const fileBytes = fs.readFileSync(filename);
     const nodeBuf = Buffer.from(fileBytes);
     // mp3tag.js expects a Buffer / ArrayBuffer; Buffer works in Deno via node shim
     const mp3tag = new MP3Tag(nodeBuf);
@@ -82,7 +64,7 @@ function writeId3Tags(
             const str = String(modified as unknown);
             return new TextEncoder().encode(str);
         })();
-    Deno.writeFileSync(filename, outBytes as Uint8Array);
+    fs.writeFileSync(filename, outBytes as Uint8Array);
 }
 
 function splitSeriesTitle(seriesTitle: string): [string, string] {
@@ -129,12 +111,12 @@ async function fetchRawInputFromUrl(
     }
 }
 
-const urlArg = Deno.args[0];
+const urlArg = process.argv[2];
 if (!urlArg) {
     console.error(
         "ERROR: Missing URL argument. Usage: deno run <permissions> index.ts <series_page_url>",
     );
-    Deno.exit(1);
+    process.exit(1);
 }
 console.log(`Fetching metadata from URL: ${urlArg}`);
 const fetched = await fetchRawInputFromUrl(urlArg);
@@ -142,11 +124,11 @@ if (!fetched) {
     console.error(
         "ERROR: Unable to obtain data-player JSON from provided URL. Aborting (no fallback).\nCheck the page structure or provide a different URL.",
     );
-    Deno.exit(1);
+    process.exit(1);
 }
 const input: RawInputShape = fetched;
 const seriesTitle = unescapeCharacters(input.data.series.title);
-await Deno.mkdir(seriesTitle, { recursive: true });
+fs.mkdirSync(seriesTitle, { recursive: true });
 const [author, bookTitle] = splitSeriesTitle(seriesTitle);
 
 const playlist = input.data.playlist;
@@ -170,26 +152,20 @@ for (const episode of playlist) {
 
     console.log(`${episodeTitle}`);
     console.log("\tDownload started.");
-    {
-        const cmd = new Deno.Command("yt-dlp", {
-            args: [dashUrl, "--output", filenameBeforeConversion],
-        });
-        const { code, stderr } = await cmd.output();
-        if (code !== 0) {
-            throw new Error(new TextDecoder().decode(stderr));
-        }
+    try {
+        await run("yt-dlp", [dashUrl, "--output", filenameBeforeConversion]);
+    } catch (e: unknown) {
+        console.log(`\t Download failed. ${e}`)
+        process.exit(1);
     }
     console.log("\tDownload finished.");
 
     console.log("\tConversion started.");
-    {
-        const cmd = new Deno.Command("ffmpeg", {
-            args: ["-y", "-i", filenameBeforeConversion, finalFilename],
-        });
-        const { code, stderr } = await cmd.output();
-        if (code !== 0) {
-            throw new Error(new TextDecoder().decode(stderr));
-        }
+    try {
+        await run("ffmpeg", ["-y", "-i", filenameBeforeConversion, finalFilename]);
+    } catch (e: unknown) {
+        console.log(`\t Conversion failed. ${e}`)
+        process.exit(1);
     }
     console.log("\tConversion finished.");
 
@@ -199,9 +175,9 @@ for (const episode of playlist) {
     // Remove original .m4a file after successful conversion & tagging to keep only mp3.
     try {
         // Basic sanity: ensure MP3 exists and is non-empty before deleting source.
-        const mp3Info = await Deno.stat(finalFilename);
+        const mp3Info = await fsPromises.stat(finalFilename);
         if (mp3Info.size > 0) {
-            await Deno.remove(filenameBeforeConversion);
+            await fsPromises.rm(filenameBeforeConversion);
             console.log("\tOriginal .m4a deleted.");
         } else {
             console.warn("\tMP3 file seems empty; preserving original .m4a.");

@@ -1,0 +1,26 @@
+{
+  "name": "radiokniha_download",
+  "version": "0.0.1",
+  "description": "Script downloads [Radiokniha](https://plus.rozhlas.cz/radiokniha-6483132) playlist episodes, converts to MP3, and writes ID3 tags.",
+  "homepage": "https://github.com/matejkrajcovic/radiokniha-download#readme",
+  "bugs": {
+    "url": "https://github.com/matejkrajcovic/radiokniha-download/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/matejkrajcovic/radiokniha-download.git"
+  },
+  "license": "ISC",
+  "author": "",
+  "type": "module",
+  "main": "index.ts",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "mp3tag.js": "^3.17.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5"
+  }
+}

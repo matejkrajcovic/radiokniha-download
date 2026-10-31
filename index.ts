@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import fsPromises from 'fs/promises'
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import readline from 'node:readline';
 
 const run = promisify(execFile);
 
@@ -129,6 +130,25 @@ const input: RawInputShape = fetched;
 const seriesTitle = unescapeCharacters(input.data.series.title);
 fs.mkdirSync(seriesTitle, { recursive: true });
 const [author, bookTitle] = splitSeriesTitle(seriesTitle);
+
+console.log(`Author: ${author}`);
+console.log(`Book title: ${bookTitle}`);
+
+const rl = readline.createInterface({
+  input: process.stdin,
+  output: process.stdout,
+});
+
+const response = await (new Promise((resolve, _reject) => {
+  rl.question('Continue (y/n)?\n', (response) => {
+    resolve(response)
+    rl.close();
+  })
+}))
+
+if (response === 'n') {
+  process.exit(0);
+}
 
 const playlist = input.data.playlist;
 

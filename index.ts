@@ -38,6 +38,7 @@ interface Id3Info {
     title: string;
     author: string;
     album: string;
+    subtitle: string | null;
     track: string; // "n/total"
     year: string;
     narrator: string | null;
@@ -60,6 +61,7 @@ function writeId3Tags(filename: string, info: Id3Info): void {
     mp3tag.tags.genre = "Audiobook";
     mp3tag.tags.v2!.TPE2 = info.author; // album artist (groups the book on Android)
     if (info.narrator) mp3tag.tags.v2!.TCOM = info.narrator;
+    if (info.subtitle) mp3tag.tags.v2!.TIT3 = info.subtitle; // ID3 "Subtitle/Description refinement"
 
     // ID3v2.3 + UTF-16 is the most widely supported combination on Android players.
     const modified = mp3tag.save({
@@ -80,9 +82,36 @@ function writeId3Tags(filename: string, info: Id3Info): void {
     fs.writeFileSync(filename, outBytes as Uint8Array);
 }
 
-function splitSeriesTitle(seriesTitle: string): [string, string] {
-    const first = seriesTitle.indexOf(":");
-    return [seriesTitle.slice(0, first), seriesTitle.slice(first + 2)];
+interface BookInfo {
+    author: string;
+    title: string;
+    subtitle: string | null;
+}
+
+// Series title is "Author: Title. Subtitle" (subtitle optional). A few series omit
+// the "Author:" prefix; then the author is taken from the page header row
+// (`<strong>Author: Short title</strong><br>`).
+function parseSeriesTitle(seriesTitle: string, html: string): BookInfo {
+    const colon = seriesTitle.indexOf(": ");
+    let author: string;
+    let rest: string;
+    if (colon !== -1) {
+        author = seriesTitle.slice(0, colon).trim();
+        rest = seriesTitle.slice(colon + 2).trim();
+    } else {
+        const header = /a-002__row">\s*<strong>([^<:]+):[^<]*<\/strong>\s*<br>/.exec(html);
+        author = header ? decodeHtmlEntities(header[1]).trim() : "";
+        rest = seriesTitle.trim();
+    }
+    // First ". " followed by an uppercase letter, not preceded by a single-letter
+    // initial (keeps e.g. "T. G. Masaryk" intact).
+    const split = /(?<!(?:^|\s)\p{L})\.\s+(?=\p{Lu})/u.exec(rest);
+    if (!split) return { author, title: rest, subtitle: null };
+    return {
+        author,
+        title: rest.slice(0, split.index).trim(),
+        subtitle: rest.slice(split.index + split[0].length).trim(),
+    };
 }
 
 // Characters not allowed in file names on FAT/exFAT/Android shared storage.
@@ -178,7 +207,7 @@ if (!fetched) {
 }
 const { input, html } = fetched;
 const seriesTitle = unescapeCharacters(input.data.series.title);
-const [author, bookTitle] = splitSeriesTitle(seriesTitle);
+const { author, title: bookTitle, subtitle } = parseSeriesTitle(seriesTitle, html);
 const narrator = extractNarrator(html);
 const playlist = input.data.playlist;
 const totalParts = Number(input.data.series.totalParts) || playlist.length;
@@ -188,6 +217,7 @@ const outputDir = sanitizeFilename(`${author} - ${bookTitle}`);
 
 console.log(`Author: ${author}`);
 console.log(`Book title: ${bookTitle}`);
+console.log(`Subtitle: ${subtitle ?? "(none)"}`);
 console.log(`Narrator: ${narrator ?? "(unknown)"}`);
 console.log(`Year: ${year}, parts: ${totalParts}`);
 console.log(`Output directory: ${outputDir}`);
@@ -268,6 +298,7 @@ for (const episode of playlist) {
         title: episodeTitle,
         author,
         album: bookTitle,
+        subtitle,
         track: `${part}/${totalParts}`,
         year,
         narrator,

@@ -23,7 +23,7 @@ interface EpisodeData {
 }
 interface RawInputShape {
     data: {
-        series: { title: string };
+        series: { title: string; totalParts?: string };
         playlist: EpisodeData[];
     };
 }
@@ -70,6 +70,11 @@ function writeId3Tags(
 function splitSeriesTitle(seriesTitle: string): [string, string] {
     const first = seriesTitle.indexOf(":");
     return [seriesTitle.slice(0, first), seriesTitle.slice(first + 2)];
+}
+
+// Characters not allowed in file names on FAT/exFAT/Android shared storage.
+function sanitizeFilename(name: string): string {
+    return name.replace(/[\\/:*?"<>|]/g, "_").replace(/[. ]+$/, "").trim();
 }
 
 // Very small helper to extract data-player JSON with a regex to avoid adding heavy HTML parser dependency.
@@ -128,11 +133,14 @@ if (!fetched) {
 }
 const input: RawInputShape = fetched;
 const seriesTitle = unescapeCharacters(input.data.series.title);
-fs.mkdirSync(seriesTitle, { recursive: true });
 const [author, bookTitle] = splitSeriesTitle(seriesTitle);
+const playlist = input.data.playlist;
+const totalParts = Number(input.data.series.totalParts) || playlist.length;
+const outputDir = sanitizeFilename(`${author} - ${bookTitle}`);
 
 console.log(`Author: ${author}`);
 console.log(`Book title: ${bookTitle}`);
+console.log(`Output directory: ${outputDir}`);
 
 const rl = readline.createInterface({
   input: process.stdin,
@@ -150,15 +158,21 @@ if (response === 'n') {
   process.exit(0);
 }
 
-const playlist = input.data.playlist;
+fs.mkdirSync(outputDir, { recursive: true });
+
+const trackDigits = Math.max(2, String(totalParts).length);
 
 for (const episode of playlist) {
     if (!episode.audioLinks || episode.audioLinks.length === 0) {
         console.warn(`Skipping episode with no audioLinks: ${episode.title}`);
         continue;
     }
-    const episodeTitle = unescapeCharacters(episode.title);
+    const part = Number(episode.part);
     const track = episode.part;
+    const episodeTitle = `${bookTitle} – díl ${part}`;
+    const baseName = sanitizeFilename(
+        `${String(part).padStart(trackDigits, "0")}. díl - ${bookTitle}`,
+    );
     // Pick best link preference: dash > hls > mp3 download
     const preferredOrder = ["dash", "hls", "mp3"];
     const chosen = preferredOrder
@@ -166,8 +180,8 @@ for (const episode of playlist) {
         .find((l): l is EpisodeAudioLink => Boolean(l)) ||
         episode.audioLinks[0];
     const dashUrl = unescapeCharacters(chosen.url);
-    const filenameBeforeConversion = `${seriesTitle}/${episodeTitle}.m4a`;
-    const finalFilename = `${seriesTitle}/${episodeTitle}.mp3`;
+    const filenameBeforeConversion = `${outputDir}/${baseName}.m4a`;
+    const finalFilename = `${outputDir}/${baseName}.mp3`;
 
     console.log(`${episodeTitle}`);
     console.log("\tDownload started.");

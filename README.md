@@ -23,4 +23,11 @@ node index.ts https://plus.rozhlas.cz/john-hersey-hirosima-reportazni-roman-o-to
 - Written in TypeScript; entrypoint is `index.ts` 💻
 - MP3 tagging uses `mp3tag.js` 🎵
 - URL argument is mandatory; failure to fetch or parse aborts with an error ❗
-- Output files are stored inside a directory named after the series title 📂
+- Output is Android-friendly (no characters invalid on FAT/exFAT storage) 📂:
+
+  ```text
+  Author - Title/
+  ├── 01. díl - Title.mp3
+  ├── 02. díl - Title.mp3
+  └── ...
+  ```

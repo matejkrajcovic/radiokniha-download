@@ -18,6 +18,7 @@ interface EpisodeAudioLink {
 interface EpisodeData {
     title: string;
     part: string; // numeric string
+    since?: string; // ISO date
     audioLinks: EpisodeAudioLink[];
     [k: string]: unknown;
 }
@@ -32,13 +33,16 @@ function unescapeCharacters(str: string): string {
     return JSON.parse(`"${str}"`);
 }
 
-function writeId3Tags(
-    filename: string,
-    author: string,
-    bookTitle: string,
-    episodeTitle: string,
-    track: string,
-): void {
+interface Id3Info {
+    title: string;
+    author: string;
+    album: string;
+    track: string; // "n/total"
+    year: string;
+    narrator: string | null;
+}
+
+function writeId3Tags(filename: string, info: Id3Info): void {
     const fileBytes = fs.readFileSync(filename);
     const nodeBuf = Buffer.from(fileBytes);
     const mp3tag = new MP3Tag(nodeBuf);
@@ -47,12 +51,20 @@ function writeId3Tags(
     if (mp3tag.error !== "") {
         throw new Error(mp3tag.error);
     }
-    mp3tag.tags.title = episodeTitle;
-    mp3tag.tags.artist = author;
-    mp3tag.tags.album = bookTitle;
-    mp3tag.tags.track = track;
+    mp3tag.tags.title = info.title;
+    mp3tag.tags.artist = info.author;
+    mp3tag.tags.album = info.album;
+    mp3tag.tags.track = info.track;
+    mp3tag.tags.year = info.year;
+    mp3tag.tags.genre = "Audiobook";
+    mp3tag.tags.v2!.TPE2 = info.author; // album artist (groups the book on Android)
+    if (info.narrator) mp3tag.tags.v2!.TCOM = info.narrator;
 
-    const modified = mp3tag.save({ strict: true, id3v2: { padding: 4096 } });
+    // ID3v2.3 + UTF-16 is the most widely supported combination on Android players.
+    const modified = mp3tag.save({
+        strict: true,
+        id3v2: { version: 3, encoding: "utf-16", padding: 4096 },
+    });
     const outBytes = modified instanceof Uint8Array
         ? modified
         : modified instanceof ArrayBuffer
@@ -77,6 +89,22 @@ function sanitizeFilename(name: string): string {
     return name.replace(/[\\/:*?"<>|]/g, "_").replace(/[. ]+$/, "").trim();
 }
 
+function decodeHtmlEntities(str: string): string {
+    return str
+        .replace(/&nbsp;/g, " ")
+        .replace(/&amp;/g, "&")
+        .replace(/&quot;/g, '"')
+        .replace(/&#0?39;/g, "'");
+}
+
+// Page contains e.g. `<strong>Čte:</strong> Igor Dostálek </div>`.
+function extractNarrator(html: string): string | null {
+    // Labels seen: "Čte:", "Účinkuje:", "Účinkují:", "Připravil a čte:".
+    const match = /<strong>\s*(?:[^<:]*\s)?(?:čte|účinkuj[eí]):\s*<\/strong>([^<]*)</iu.exec(html);
+    const name = match ? decodeHtmlEntities(match[1]).trim() : "";
+    return name || null;
+}
+
 // Very small helper to extract data-player JSON with a regex to avoid adding heavy HTML parser dependency.
 // It looks for an element whose class attribute contains "mujRozhlasPlayer" (token match) and has a data-player attribute.
 const DATA_PLAYER_REGEX =
@@ -84,7 +112,7 @@ const DATA_PLAYER_REGEX =
 
 async function fetchRawInputFromUrl(
     url: string,
-): Promise<RawInputShape | null> {
+): Promise<{ input: RawInputShape; html: string } | null> {
     try {
         const res = await fetch(url, { redirect: "follow" });
         if (!res.ok) {
@@ -105,7 +133,7 @@ async function fetchRawInputFromUrl(
         // data-player content is JSON-like; ensure proper quoting
         try {
             const parsed = JSON.parse(dataPlayer);
-            return parsed as RawInputShape;
+            return { input: parsed as RawInputShape, html };
         } catch (e) {
             console.error("Failed to parse data-player JSON:", e);
             return null;
@@ -131,15 +159,20 @@ if (!fetched) {
     );
     process.exit(1);
 }
-const input: RawInputShape = fetched;
+const { input, html } = fetched;
 const seriesTitle = unescapeCharacters(input.data.series.title);
 const [author, bookTitle] = splitSeriesTitle(seriesTitle);
+const narrator = extractNarrator(html);
 const playlist = input.data.playlist;
 const totalParts = Number(input.data.series.totalParts) || playlist.length;
+const firstAired = playlist.find((e) => e.since)?.since;
+const year = String(firstAired ? new Date(firstAired).getFullYear() : new Date().getFullYear());
 const outputDir = sanitizeFilename(`${author} - ${bookTitle}`);
 
 console.log(`Author: ${author}`);
 console.log(`Book title: ${bookTitle}`);
+console.log(`Narrator: ${narrator ?? "(unknown)"}`);
+console.log(`Year: ${year}, parts: ${totalParts}`);
 console.log(`Output directory: ${outputDir}`);
 
 const rl = readline.createInterface({
@@ -168,7 +201,6 @@ for (const episode of playlist) {
         continue;
     }
     const part = Number(episode.part);
-    const track = episode.part;
     const episodeTitle = `${bookTitle} – díl ${part}`;
     const baseName = sanitizeFilename(
         `${String(part).padStart(trackDigits, "0")}. díl - ${bookTitle}`,
@@ -195,14 +227,25 @@ for (const episode of playlist) {
 
     console.log("\tConversion started.");
     try {
-        await run("ffmpeg", ["-y", "-i", filenameBeforeConversion, finalFilename]);
+        await run("ffmpeg", [
+            "-y", "-i", filenameBeforeConversion,
+            "-id3v2_version", "3", // so year is written as TYER (v2.3), not TDRC (v2.4)
+            finalFilename,
+        ]);
     } catch (e: unknown) {
         console.log(`\t Conversion failed. ${e}`)
         process.exit(1);
     }
     console.log("\tConversion finished.");
 
-    writeId3Tags(finalFilename, author, bookTitle, episodeTitle, track);
+    writeId3Tags(finalFilename, {
+        title: episodeTitle,
+        author,
+        album: bookTitle,
+        track: `${part}/${totalParts}`,
+        year,
+        narrator,
+    });
     console.log("\tID3 tags written.");
 
     // Remove original .m4a file after successful conversion & tagging to keep only mp3.

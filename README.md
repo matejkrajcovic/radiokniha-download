@@ -27,6 +27,7 @@ node index.ts https://plus.rozhlas.cz/john-hersey-hirosima-reportazni-roman-o-to
 
   ```text
   Author - Title/
+  ├── cover.jpg
   ├── 01. díl - Title.mp3
   ├── 02. díl - Title.mp3
   └── ...

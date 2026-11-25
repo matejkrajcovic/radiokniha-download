@@ -25,6 +25,7 @@ interface EpisodeData {
 interface RawInputShape {
     data: {
         series: { title: string; totalParts?: string };
+        poster?: { src?: string };
         playlist: EpisodeData[];
     };
 }
@@ -103,6 +104,22 @@ function extractNarrator(html: string): string | null {
     const match = /<strong>\s*(?:[^<:]*\s)?(?:čte|účinkuj[eí]):\s*<\/strong>([^<]*)</iu.exec(html);
     const name = match ? decodeHtmlEntities(match[1]).trim() : "";
     return name || null;
+}
+
+// Poster URLs point to a resized style; strip it to get the original image.
+function originalPosterUrl(src: string): string {
+    return src.replace(/\/styles\/[^/]+\/public\//, "/").replace(/\?.*$/, "");
+}
+
+async function downloadCover(src: string, target: string): Promise<void> {
+    for (const url of [originalPosterUrl(src), src]) {
+        const res = await fetch(url);
+        if (res.ok) {
+            fs.writeFileSync(target, Buffer.from(await res.arrayBuffer()));
+            return;
+        }
+    }
+    throw new Error(`Cover download failed: ${src}`);
 }
 
 // Very small helper to extract data-player JSON with a regex to avoid adding heavy HTML parser dependency.
@@ -192,6 +209,15 @@ if (response === 'n') {
 }
 
 fs.mkdirSync(outputDir, { recursive: true });
+
+if (input.data.poster?.src) {
+    try {
+        await downloadCover(unescapeCharacters(input.data.poster.src), `${outputDir}/cover.jpg`);
+        console.log("Cover downloaded.");
+    } catch (e) {
+        console.warn("Could not download cover:", e);
+    }
+}
 
 const trackDigits = Math.max(2, String(totalParts).length);
 
